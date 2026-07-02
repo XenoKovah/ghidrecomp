@@ -1,4 +1,5 @@
 import re
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 from argparse import Namespace
@@ -83,7 +84,7 @@ def setup_decompliers(program: "ghidra.program.model.listing.Program", thread_co
 def decompile_func(func: 'ghidra.program.model.listing.Function',
                    decompilers: dict,
                    thread_id: int = 0,
-                   timeout: int = 0,
+                   timeout: int = 120,  # per-function decompile bound (s); overridable via GHIDRECOMP_DECOMP_TIMEOUT (0 = infinite/stock). Keeps a CFG-corrupt function from wedging a worker forever.
                    monitor=None) -> list:
     """
     Decompile function and return [funcname, decompilation]
@@ -188,8 +189,12 @@ def process_program(program: "ghidra.program.model.listing.Program",
 
         # Decompile all files
         start = time()
+        # Per-function decompile timeout (seconds). Bounds pathological / CFG-corrupt
+        # functions so a single runaway can't wedge a worker (and ghidrecomp) forever.
+        # Override with GHIDRECOMP_DECOMP_TIMEOUT; 0 = infinite (stock behavior).
+        _decomp_timeout = int(os.environ.get('GHIDRECOMP_DECOMP_TIMEOUT', '120') or '120')
         with concurrent.futures.ThreadPoolExecutor(max_workers=thread_count) as executor:
-            futures = (executor.submit(decompile_func, func, decompilers, thread_id % thread_count, monitor=monitor)
+            futures = (executor.submit(decompile_func, func, decompilers, thread_id % thread_count, timeout=_decomp_timeout, monitor=monitor)
                        for thread_id, func in enumerate(all_funcs) if args.skip_cache or not (decomp_path / (get_filename(func) + '.c')).exists())
 
             for future in concurrent.futures.as_completed(futures):
